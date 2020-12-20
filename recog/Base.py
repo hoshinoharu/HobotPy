@@ -125,6 +125,10 @@ def cmp_hash(hash1, hash2):
 
 class TargetImage:
 
+    @classmethod
+    def convert_image_src(cls, src):
+        return '../resources/upload/imgs/{}'.format(src.split('img/')[-1])
+
     def __init__(self, dic):
         self.src = None
         self.x = None
@@ -138,7 +142,8 @@ class TargetImage:
         self.__dict__ = dic
 
     def get_image_src(self):
-        return '../resources/upload/imgs/{}'.format(self.src.split('img/')[-1])
+        return TargetImage.convert_image_src(self.src)
+
 
     def get_bound(self):
         # type: () -> Bound
@@ -211,9 +216,7 @@ class Bound:
         #     return True
         # else:
         #     return False
-        # if overlayW * overlayH > 0:
-        #     print overlayW * overlayH
-        return overlayW * overlayH > 0
+        return False if overlayW <= 0 or overlayH <= 0 else overlayW * overlayH > 0
 
     pass
 
@@ -228,7 +231,7 @@ class ContourBound(Bound):
         self.parent = None
 
     def __str__(self):
-        return 'id:{},parentId:{}'.format(self.id, -1 if self.parent is None else self.parent.id)
+        return 'id:{},parentId:{}, x:{}, y:{}'.format(self.id, -1 if self.parent is None else self.parent.id, self.x, self.y)
 
 
 class MatchResult:
@@ -257,14 +260,23 @@ class ImageHash:
         dif = cmp_hash(self.diffHash, other.diffHash)
         per = cmp_hash(self.perceiveHash, other.perceiveHash)
         print u'图片差值比较', avg, dif, per
+        complateCompare = 0.0
+        maxComplateCompare = 3.0
         # 如果有一个是1直接返回1，表示图片是一样的
-        if dif == 1 or per == 1:
-            return 1
+        if avg == 1:
+            complateCompare += 0.5
+        if dif == 1:
+            complateCompare += 1
+        if per == 1:
+            complateCompare += 1
+
         res += avg
         res += dif
         res += per
         # 取三个hash的平均值
-        return res / 3
+        percent = res / 3
+        percent = (1 - percent) * (complateCompare / maxComplateCompare) + percent
+        return percent
 
     pass
 
@@ -439,7 +451,7 @@ class ListFrameRecognizer(Recognizer):
         binary, contours, hierarchy = cv2.findContours(thresh, cv2.RETR_CCOMP, cv2.CHAIN_APPROX_SIMPLE)
         target_bounds = []
         bounds = []
-        # cnt = []
+        cnt = []
 
         for index, cont in enumerate(contours):
             if len(cont) >= 4:
@@ -447,6 +459,7 @@ class ListFrameRecognizer(Recognizer):
                 if abs(contour_bound.width - self.itemImage.width) < self.width_offset and abs(
                         contour_bound.height - self.itemImage.height) < self.height_offset:
                     bounds.append(contour_bound)
+        bounds.sort(key=lambda bd: (bd.y, bd.x))
         # 去除相交的矩形,取面积较大的矩形
         for i, cont in enumerate(bounds):
             target_bound = None
@@ -468,6 +481,10 @@ class ListFrameRecognizer(Recognizer):
         for bound in target_bounds:
             bound.x += self.listImage.x
             bound.y += self.listImage.y
+            cnt.append(bound.get_numpy_array())
+
+        res2 = cv2.drawContours(self.pic_tpl, cnt, -1, (250, 255, 255), 2)
+        cv2.imwrite('cnt.png', res2)
         return target_bounds
 
         # cnt = contours[8]

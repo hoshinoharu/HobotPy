@@ -73,9 +73,21 @@ class AndroidDebugBridge(ScreenProvider, TouchExecutor):
         factor_h = random.random()
         x = bound.x + (2 + factor_w) * frag_w
         y = bound.y + (2 + factor_h) * frag_h
-        cmd = 'input tap {} {}'.format(x, y)
-        print cmd
-        self.android_device.shell(cmd)
+        if self.miniTouch is None:
+            self.miniTouch = Minitouch(self.adb, ori_function=self.android_device.get_display_info,
+                                       input_event=self.android_device.input_event)
+
+        events = [
+            DownEvent(self.ori_to_up(x, y), 0),
+            SleepEvent(0.2),
+            UpEvent(0)
+        ]
+        print 'execute_tap {}, {}'.format(x, y)
+        self.miniTouch.perform(events, 0)
+
+        # cmd = 'input tap {} {}'.format(x, y)
+        # print cmd
+        # self.android_device.shell(cmd)
 
     def ori_to_up(self, x, y):
         displayInfo = self.get_display_info()

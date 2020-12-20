@@ -74,7 +74,16 @@ class FlowContext:
         return [] if node.id not in self.listenerMap else self.listenerMap[node.id]
 
 
+class NodeProperty:
+
+    def __init__(self):
+        self.repaint = True
+        pass
+
+
 class Node:
+    runningChild = None  # type: Node
+    runtime = None  # type: NodeProperty
     id = None
     # 超时时间
     timeout = None
@@ -119,10 +128,20 @@ class Node:
         self.broken = False
         # 是否失败
         self.failed = False
+        # 确认执行超时时间
+        self.confirmSleep = 500
         # 正在运行的子节点
         self.runningChild = None
         # 触发操作后是否会重新绘制界面
         self.repaint = True
+        # 运行时的属性
+        self.runtime = NodeProperty()
+
+    def init_runtime(self):
+        self.runtime.repaint = self.repaint
+
+    def keep_children_running(self):
+        return True
 
     def __str__(self):
         return self.name
@@ -224,7 +243,7 @@ class Node:
                 # 判断当前是否可以执行
                 if self.can_execute(context):
                     if self.execute(context):
-                        time.sleep(1)
+                        time.sleep(self.confirmSleep / 1000.0)
                         self.start_confirm()
                         confirmed = False
                         while not self.has_confirm_timeout() and not confirmed:
@@ -234,7 +253,7 @@ class Node:
                                 if self.idempotent_execution():
                                     self.executed = False
                                     self.execute(context)
-                                    time.sleep(1)
+                                    time.sleep(self.confirmSleep / 1000.0)
                             else:
                                 self.executed = True
                         # 如果超时了还是没有确认执行成功
@@ -262,7 +281,7 @@ class Node:
                             self.finished = True
             else:
                 # 如果当前节点执行成功，则执行子节点
-                while not self.broken:
+                while self.keep_children_running():
                     # 查找有无未结束的子任务节点
                     child = self.pick_unfinished_child()
                     if child is None:
@@ -296,13 +315,12 @@ class Node:
     def after_child_run(self, child, context):
         # type: (Node, FlowContext) -> None
         # 如果子节点执行失败，则当前节点也执行失败
-        if child.name == u'远征中':
-            print ''
         if child.failed:
             self.failed = True
         if child.broken:
             self.broken = True
-            pass
+        # 设置运行时参数为子节点的参数
+        self.runtime.repaint = child.repaint
 
     def has_confirm_timeout(self):
         if self.confirm_start_time is None:
@@ -333,6 +351,14 @@ class Node:
         self.first_judge_time = datetime.now()
         self.broken = False
         self.failed = False
+        self.runningChild = None
+        self.init_runtime()
+
+    def get_last_run_node(self):
+        if self.runningChild is not None:
+            return self.runningChild.get_last_run_node()
+        else:
+            return self
 
 
 class RootNode(Node):
@@ -393,7 +419,7 @@ class FlowNode(Node, FlowContextListener):
         recog = BaseRecognizer(img)
         tag = get_image_src_name(img) + '_judge'
         matchResult = recog.match_pic(pic, tag)
-        if matchResult.possibility < 0.96 and not img['notExists']:
+        if matchResult.possibility < img['possibility'] and not img['notExists']:
             return False
         else:
             return True
@@ -417,20 +443,22 @@ class FlowNode(Node, FlowContextListener):
             can = True
             for img in group['images']:
                 index += 1
-                recog = BaseRecognizer(img)
                 tag = get_image_src_name(img) + '_judge'
-                matchResult = recog.match_pic(context.get_screen_bytes(), tag)
+                matchResult, canMatch = self.can_match(context, img, tag)
                 resDic = {
                     'image': '/img/{}.png'.format(tag),
                     'possibility': matchResult.possibility,
                     'loc': matchResult.matchBound,
                     'x': matchResult.matchBound.x,
                     'y': matchResult.matchBound.y,
+                    'targetPossibility': img['possibility'],
+                    'targetX': img['x'],
+                    'targetY': img['y'],
                 }
                 self.set_landmark_recognize_result(resDic, index)
                 self.log(u'识别标识结果：{}'.format(resDic))
                 notExist = img['notExists']
-                if matchResult.possibility < 0.96:  # 匹配失败
+                if not canMatch:  # 匹配失败
                     if notExist:  # 如果就是判定不存在
                         can = True
                     else:
@@ -450,6 +478,44 @@ class FlowNode(Node, FlowContextListener):
                 break
         self.log('recognize_landmark：{}'.format(can))
         return can
+
+    def can_match(self, context, img, tag):
+        # type: (FlowContext, dict, str) -> (MatchResult, bool)
+        if 'decimalValue' in img and img['decimalValue'] is not None:
+            # 识别图片中的数值
+            decimalValue = img['decimalValue']
+
+        recog = BaseRecognizer(img)
+        matchResult = recog.match_pic(context.get_screen_bytes(), tag)
+        # 如果直接识别正确，则直接返回True，并修改识别bound
+        if img['directlyRecognizeTrue']:
+            matchResult.matchBound.x = img['x']
+            matchResult.matchBound.y = img['y']
+            matchResult.matchBound.width = img['width']
+            matchResult.matchBound.height = img['height']
+            return True
+        match = matchResult.possibility >= img['possibility']
+        if match:
+            compY = img['compareYWhenNotMatch']
+            compX = img['compareXWhenNotMatch']
+
+            if compX and compY:
+                match = matchResult.matchBound.x == img['x'] and matchResult.matchBound.y == img['y']
+            elif compX:
+                match = matchResult.matchBound.x == img['x']
+            elif compY:
+                match = matchResult.matchBound.y == img['y']
+
+        # 比较图片hash
+        # if match:
+        #     matchImg = Recognizer.cut(context.get_screen_bytes(), match_result.matchBound)
+        #     matchHash = Recognizer.hash(matchImg)
+        #     imgHash = Recognizer.hash(cv2.imread(TargetImage.convert_image_src(img['src']), cv2.COLOR_BGR2RGB))
+        #     hashRes = matchHash.compare(imgHash)
+        # if hashRes < 0.99:
+        #     match = False
+
+        return matchResult, match
 
     def set_landmark_recognize_result(self, result, index):
         # 保存匹配结果
@@ -581,7 +647,9 @@ class FlowNode(Node, FlowContextListener):
                     child.finished = True
 
         if self.type == 'list':
-            if child.repaint and child.finished and child.executed and not child.broken:
+            # 获取最后运行的节点
+            last_node = self.get_last_run_node()
+            if last_node.repaint and child.finished and child.executed and not child.broken:
                 # 子节点成功执行完成的话，刷新item索引
                 self.item_index = -1
                 self.itemBounds = None
@@ -625,7 +693,7 @@ class FlowNode(Node, FlowContextListener):
                                                          Recognizer.cut(context.get_screen_bytes(), self.swipeBound))
             self.log('滑动后图片相似度：{}'.format(similarity))
             # 标识两张图片不一样
-            if similarity < 0.98:
+            if similarity < 0.97:
                 confirm = True
                 # 重新初始化滑动相关参数
                 self.swipeConfirmed = True
@@ -691,26 +759,28 @@ class FlowNode(Node, FlowContextListener):
         if self.actionImage is None:
             return True
         context.notify_current_node(self)
-        recog = BaseRecognizer(self.actionImage)
         tag = get_image_src_name(self.actionImage) + '_execute'
-        matchResult = recog.match_pic(context.get_screen_bytes(), tag)
+        matchResult, flag = self.can_match(context, self.actionImage, tag)
         self.actionRecognizeResult = {
             'image': '/img/{}.png'.format(tag),
             'possibility': matchResult.possibility,
             'loc': matchResult.matchBound,
             'x': matchResult.matchBound.x,
             'y': matchResult.matchBound.y,
-            'action': 'tap'
+            'action': 'tap',
+            'targetPossibility': self.actionImage['possibility'],
+            'targetX': self.actionImage['x'],
+            'targetY': self.actionImage['y'],
+
         }
-        flag = matchResult.possibility > 0.95
         return flag
 
     def mark_finish(self, context):
         context.notify_current_node(self)
         Node.mark_finish(self, context)
         if self.type == 'list':
-            # 如果当前需要跳过的item数量超过3个则表示超时，需要结束
-            if len(self.skipImageHash) >= 6:
+            # 如果当前需要跳过的item数量超过3个则表示超时，需要结束, 暂时关闭图片数量限制
+            if len(self.skipImageHash) >= 9999:
                 self.log('当前跳过图片数量：{}'.format(len(self.skipImageHash)))
                 self.finished = True
             else:
@@ -754,3 +824,8 @@ class FlowNode(Node, FlowContextListener):
         if self.type == 'list':
             return False
         return True
+
+    def keep_children_running(self):
+        if self.type == 'switch':
+            return not self.broken
+        return Node.keep_children_running(self)

@@ -137,6 +137,7 @@ class FlowBoot:
             for key in nd:
                 set_props(flow_node, key, nd)
             flow_node.children = []
+            flow_node.init_runtime()
             # 初始化运行id
             if flow_node.run_id is None:
                 flow_node.run_id = str(uuid.uuid4())
@@ -165,6 +166,10 @@ class FlowBoot:
             to_node.parent = from_node
             to_node.landmarkImageGroups = ld['landmarkImageGroups']
             from_node.children.append(to_node)
+            if from_node.id in self.shared_node_dic:
+                for shared_node in self.shared_node_dic[from_node.id]:
+                    if shared_node is not from_node:
+                        shared_node.children = from_node.children
         cur_node = first_node
         while True:
             if cur_node.parent is None:
