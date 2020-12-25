@@ -493,14 +493,14 @@ class FlowNode(Node, FlowContextListener):
             matchResult.matchBound.y = img['y']
             matchResult.matchBound.width = img['width']
             matchResult.matchBound.height = img['height']
-            return True
-        match = matchResult.possibility >= img['possibility']
+            return matchResult, True
+        match = (matchResult.possibility >= img['possibility'])
         if match:
             compY = img['compareYWhenNotMatch']
             compX = img['compareXWhenNotMatch']
 
             if compX and compY:
-                match = matchResult.matchBound.x == img['x'] and matchResult.matchBound.y == img['y']
+                match = (matchResult.matchBound.x == img['x'] and matchResult.matchBound.y == img['y'])
             elif compX:
                 match = matchResult.matchBound.x == img['x']
             elif compY:
@@ -760,7 +760,7 @@ class FlowNode(Node, FlowContextListener):
             return True
         context.notify_current_node(self)
         tag = get_image_src_name(self.actionImage) + '_execute'
-        matchResult, flag = self.can_match(context, self.actionImage, tag)
+        (matchResult, flag) = self.can_match(context, self.actionImage, tag)
         self.actionRecognizeResult = {
             'image': '/img/{}.png'.format(tag),
             'possibility': matchResult.possibility,
